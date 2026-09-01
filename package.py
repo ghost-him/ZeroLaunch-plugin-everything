@@ -35,6 +35,12 @@ import sys
 import zipfile
 from pathlib import Path
 
+# CI/部分 Windows 控制台默认编码非 UTF-8（如 cp1252），
+# 直接 print 中文/全角字符会抛 UnicodeEncodeError；统一重配置为 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
