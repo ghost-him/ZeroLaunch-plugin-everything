@@ -1,12 +1,11 @@
 [package]
-name = "zerolaunch-hello-world-plugin"
-version = "0.1.0"
+name = "zerolaunch-plugin-everything"
+version = "0.2.0"
 edition = "2021"
-description = "Hello-world example for ZeroLaunch third-party plugins."
 license = "Apache-2.0"
 
 [dependencies]
-zerolaunch-plugin-sdk-rust = "0.1"
+ zerolaunch-plugin-sdk-rust = "0.1"
 zerolaunch-plugin-api = "0.1"
 zerolaunch-plugin-protocol = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -14,6 +13,13 @@ serde_json = "1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
+blake3 = "1.8"
+parking_lot = "0.12"
+
+# Everything SDK 绑定仅支持 Windows x86_64（Everything 服务本身亦仅提供 64 位 SDK DLL）。
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+everything-rs = "0.1.10"
+everything-sys-bindgen = "0.1.5"
 
 # 独立于父 workspace（插件为独立分发包，不参与宿主 workspace 构建）
 [workspace]
