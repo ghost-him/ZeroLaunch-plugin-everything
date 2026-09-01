@@ -1,47 +1,103 @@
-# ZeroLaunch 第三方插件模板
+# ZeroLaunch Everything 搜索插件
 
-本模板是 ZeroLaunch 第三方 Rust 插件的最小骨架，覆盖开发、调试、打包、安装全流程。
+ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，以沉浸式面板呈现结果。触发词 `ev` / `every`，全局热键 `Ctrl+E`。
+
+## 功能
+
+- **Everything 实时检索**：完整路径匹配查询，支持 Everything 原生查询语法（`ext:`、`folder:`、`!` 等，见 Everything 文档）。
+- **沉浸式面板**：面板自渲染结果列表——文件类型 emoji 图标、大小、修改时间、扩展名徽标、所在目录；不依赖宿主 List 管线与图标链路。
+- **打开与定位**：`Enter` 打开文件；双击或动作菜单打开文件；`open_folder` 动作打开所在文件夹。
+- **路径匹配开关**：`Ctrl+U` 切换"匹配完整路径而非仅文件名"（等价 Everything 的 Ctrl+U），即时生效，状态回显在面板底栏。
+- **短查询优化**：查询长度低于排序阈值时跳过排序直接返回，降低短查询（命中项极多）的延迟。
+
+## 环境要求
+
+- Windows x86_64（Everything SDK 仅提供 64 位 DLL，插件二进制同样仅构建该目标）。
+- 本机已安装并运行 [Everything](https://www.voidtools.com/)（SDK 查询依赖 Everything 服务）。
+- ZeroLaunch 宿主 `>= 0.1.0`（`manifest.toml` 的 `minHostVersion`）。
+
+## 使用
+
+| 操作 | 效果 |
+| --- | --- |
+| `Ctrl+E` | 唤起沉浸式面板 |
+| 搜索栏输入 `ev` / `every` + 空格 | 触发词唤起（带查询词时直接展示结果并预填输入框） |
+| `↑` / `↓` | 选择结果 |
+| `Enter` / 双击 | 打开选中项 |
+| `Ctrl+U` | 切换路径匹配 |
+| `Esc` | 返回宿主默认面板 |
+
+面板内输入 200ms 防抖后查询（Everything 查询为阻塞调用，避免每键触发）；`Esc` / `Ctrl+U` 由插件 `interaction_policy` bindings 声明，宿主键盘状态机统一解释执行。
+
+## 配置
+
+设置页可配置项（`src/main.rs` `setting_schema()`）：
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| 排序阈值 | `4` | 查询长度达到该字符数才排序（1~3 字符短查询跳过） |
+| 排序方式 | 名称升序 | 26 种排序（名称/路径/大小/扩展名/类型/创建/修改/访问日期等，升序或降序） |
+| 结果数量上限 | `10` | 单次查询最大返回数（1–100） |
+| 路径匹配 | 关 | 匹配完整路径而非仅文件名（等价 Everything 的 Ctrl+U） |
+
+## 架构
+
+```
+搜索栏输入 → host.query() → 宿主 bridge_query → 插件 query()
+    → Everything SDK（阻塞线程池 + search_guard 串行化）
+    → QueryResponse::CustomPanel { panel_type: "everything", data: 自描述 JSON }
+    → 面板 onDataUpdate / host.query 响应 → 自渲染列表
+Enter → host.executeAction("open", { path }) → 宿主 shell_open
+```
+
+- **CustomPanel 数据契约**：`panelData` 为自描述 JSON——`query`、`items`（`path`/`name`/`dir`/`isFolder`/`size`/`modified`(unix 秒)/`extension`）、`sortSkipped`、`enablePathMatch`、`resultLimit`。面板按需自渲染，`keep_search_bar = false`。
+- **唤醒重放**：宿主唤起面板时经 `onDataUpdate` 重放下次查询数据；触发词带查询词进入时直接展示结果并将查询词预填到输入框。
+- **List 回退**：面板 `normalizeResponse` 兼容宿主旧管线返回的 `mode: "search"` 列表形状（title/subtitle/icon），统一为内部 item。
+- **SDK 并发约束**：Everything SDK 的 set_search/query/迭代作用于进程内全局状态，全部查询经 `search_guard` 互斥串行化，并在 `tokio::spawn_blocking` 中执行，避免阻塞 RPC 循环。
+- **单实例复用**：进程内复用首个 `Everything` 实例（第二个实例的数据库等待会挂死）；每次查询前 `reset()` 清空上次结果状态；`Everything_SetMatchPath` 为 SDK 全局状态，每次查询显式设置保证确定性。
+- **运行时依赖**：`extra/Everything64.dll` 由打包脚本并入 zip 根，安装后必须与插件 exe 同目录（`bin/`）。
 
 ## 项目结构
 
 ```
-plugin-template/
-├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api / plugin-protocol
-├── manifest.toml       # 插件清单（id、形态、热键、面板入口），打包时位于 zip 根
-├── package.py          # 一键打包脚本（cargo build --release + 生成安装 zip）
-├── src/main.rs         # 插件实现（Plugin + Configurable trait）
-├── ui/                 # 自定义面板（沉浸式/行内插件可选）
-└── i18n/               # 语言包（host 加载时合并进翻译目录，t_key() 自动带插件 id 前缀）
+├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api / plugin-protocol（0.1）
+├── manifest.toml       # 插件清单（id、触发词、热键、面板入口），打包时位于 zip 根
+├── src/main.rs         # EverythingPlugin（Plugin + Configurable trait 实现）
+├── ui/panel.mjs        # 沉浸式面板（Shadow DOM 内挂载，宿主 CSS 变量自动跟随主题）
+├── i18n/               # 语言包（zh-Hans / en，host 加载时合并进翻译目录）
+├── extra/              # Everything64.dll（打包时并入 zip 根，与 exe 同目录）
+├── package.py          # 打包脚本（Python 3.11+，tomllib 标准库）
+└── .github/workflows/ci.yml   # CI：cargo check + release 构建 + 打包
 ```
 
-依赖方向：插件只依赖 `zerolaunch-plugin-api`（trait/类型）与 `zerolaunch-plugin-sdk-rust`（`run()`、`host()`），不依赖 Tauri/宿主源码。
+插件只依赖 SDK crates（trait/类型 + `run()`/`host()`），不依赖 Tauri/宿主源码；独立于宿主 workspace 构建。
 
-## 开发流程
+## 构建与打包
 
-1. **改标识**：`manifest.toml` 的 `id`（如 `com.example.hello-world`）与 `src/main.rs` 中 `ComponentCore::new` / `PluginMetadata.id` 保持一致；两者及 `Cargo.toml` 的 `version` 三处版本号需同步。
-2. **实现 `Plugin` trait**：
-   - `metadata()`：插件元数据——注意 `mode` 决定形态：`Panel`（沉浸式，热键/触发词唤醒后接管窗口）或 `Inline`（行内，触发词前缀路由）。
-   - `query()`：接收用户输入返回结果。两种响应形状：
-     - `QueryResponse::List`：标准搜索结果（搜索栏/CLI 输出）。
-     - `QueryResponse::CustomPanel`：自定义面板响应，`data` 可承载**任意 JSON**，面板 UI 完全自定义（参考 Everything 插件按需渲染）；`keep_search_bar` 决定是否保留搜索栏。
-   - `execute_action()`：动作执行（打开文件等经 `host()` 平台 API）。
-3. **`Configurable` trait**：`setting_schema()` 声明设置项（宿主设置页自动渲染），`apply_settings()` 应用返回值，`get_settings()` 提供当前值。
-4. **i18n**：所有面向用户的文本用 `t_key("key")` 生成命名空间键，`i18n/zh-Hans.json`、`en.json` 提供译文；面板侧用 `host.t(key)`（同键）。插件 id 由宿主在握手时注入，`main()` 内组件构造、`metadata()` 等 `run()` 之前的位置使用 `t_key` 需先调用 `zerolaunch_plugin_sdk_rust::init()`（模板 `main()` 已含）。语言包键与 `t_key` 路径一致，可带点号（如 `"booster.name"` 对应 `t_key("booster.name")`，宿主加载时按点展开为嵌套目录，前端/`host.t()` 按同路径查找）；键值仅允许字符串或嵌套对象（数字/布尔会被宿主拒绝加载）。
-5. **自定义面板**（可选）：`manifest.toml` 的 `[ui] panelEntry` 指向 `ui/panel.mjs`，导出 `mount(rootEl, host)`；锚定宿主 Shadow DOM 内执行，样式直接用宿主 CSS 变量（`--bg-primary`、`--text-primary` 等）即可自动跟随宿主主题。**销毁契约**：面板反复开关时若在 mount 内创建了定时器 / window 级监听器等资源，须在 `host.onDestroy(cb)` 注册清理回调，或让 `mount` 返回 cleanup 函数——宿主卸载面板时统一调用，避免资源随开关次数累积泄漏。
+```bash
+cargo check                 # 零错误冒烟
+python package.py           # cargo build --release 后打包
+python package.py --no-build    # 复用现有产物直接打包
+python package.py --target <triple>   # 交叉编译
+python package.py --out <目录>       # 指定输出目录（默认 ./dist）
+```
+
+无系统 Python 时：`uv run package.py`。
+
+产物 `dist/com.ghost-him.everything-<version>.zip`，zip 布局：`manifest.toml` 位于根、`bin/zerolaunch-plugin-everything.exe`、`ui/`、`i18n/`、`Everything64.dll`（extra/ 内容并入根）。
+
+## 安装
+
+- 设置 → 插件管理 → 安装本地插件，选择 zip；或
+- 手动解压到 `%USERPROFILE%/.ZeroLaunch-rs/plugins/com.ghost-him.everything/` 后重新加载。
 
 ## 调试与验证
 
-- **插件日志**：`%USERPROFILE%/.ZeroLaunch-rs/plugin-logs/<plugin-id>.log`（与宿主日志分离，可直接检查查询/错误）。
-- **CLI 查询**：宿主运行时可 `zerolaunch-cli.exe query "ev xxx"` 直查插件响应形状（加 `--json` 输出原始 JSON，适合验证 `CustomPanel` 载荷）。
-- **修改后冒烟**：`cargo check` 零错误；面板改动可在宿主预览（设置页重新加载插件）。
+- **插件日志**：`%USERPROFILE%/.ZeroLaunch-rs/plugin-logs/com.ghost-him.everything.log`（含每次查询的耗时埋点：setup/query/total ms）。
+- **CLI 查询**：宿主运行时 `zerolaunch-cli.exe query "ev xxx"` 直查插件响应（`--json` 输出原始 JSON，用于验证 CustomPanel 载荷）。
+- **面板改动**：修改 `ui/panel.mjs` 后需重新打包安装/重新加载插件（宿主按 URL 缓存 ESM 模块，重载时旧模块可能残留，必要时重启宿主）。
 
-## 发布
+## 已知限制
 
-```bash
-python package.py          # 等价于 cargo build --release 后打包（无 Python 可用 uv run --python 3.12 python package.py）
-python package.py --no-build   # 复用现有产物直接打包
-```
-
-生成 `<plugin-id>-<version>.zip`：`manifest.toml` 必须位于 zip 根，`extra/` 目录内容并入 zip 根（与 exe 同目录的运行时文件放这里）。
-
-安装：设置 → 插件管理 → 安装本地插件，选择 zip；或手动解压到 `%USERPROFILE%/.ZeroLaunch-rs/plugins/<plugin-id>/` 后重新加载。
+- 仅 Windows x86_64：其他平台 `search_everything` 编译为返回空结果（SDK 不可用）。
+- Everything 服务未运行时查询返回错误并在面板显示（Everything SDK 查询可能短暂阻塞等待服务）。

@@ -1,11 +1,11 @@
 [package]
 name = "zerolaunch-plugin-everything"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
- zerolaunch-plugin-sdk-rust = "0.1"
+zerolaunch-plugin-sdk-rust = "0.1"
 zerolaunch-plugin-api = "0.1"
 zerolaunch-plugin-protocol = "0.1"
 serde = { version = "1", features = ["derive"] }
