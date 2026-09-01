@@ -1,0 +1,19 @@
+[package]
+name = "zerolaunch-hello-world-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Hello-world example for ZeroLaunch third-party plugins."
+license = "Apache-2.0"
+
+[dependencies]
+zerolaunch-plugin-sdk-rust = "0.1"
+zerolaunch-plugin-api = "0.1"
+zerolaunch-plugin-protocol = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+
+# 独立于父 workspace（插件为独立分发包，不参与宿主 workspace 构建）
+[workspace]
