@@ -10,7 +10,11 @@
 无系统 Python 时可用 uv 运行（uv 自动下载托管 Python，无需手动安装）:
     uv run --python 3.12 python package.py
 
-产物: <输出目录>/<plugin-id>-<version>.zip
+产物: <输出目录>/zerolaunch-plugin-<插件短id>-v<版本号>.zip
+
+插件短id = manifest [plugin].id 去掉域名前缀后的末段
+（如 com.ghost-him.everything → everything，com.example.hello-world → hello-world）；
+产物名与插件二进制/仓库命名族 zerolaunch-plugin-* 对齐，便于按插件+版本归档分发。
 
 zip 根目录结构（与宿主安装器约定一致，manifest.toml 必须位于 zip 根）:
     manifest.toml
@@ -78,6 +82,41 @@ def load_toml(path: Path) -> dict:
     """读取 toml 文件并返回解析结果；文件缺失或格式错误时直接报错退出。"""
     with open(path, "rb") as f:
         return tomllib.load(f)
+
+
+def short_plugin_id(plugin_id: str) -> str:
+    """从 manifest 插件 id 提取末段作产物名：com.ghost-him.everything → everything。
+
+    同时校验 id 是合法的『域.短名』形式——若短名缺失（裸名/纯域名）则按字面使用
+    整个 id，避免产物名退化成无区分度的 zerolaunch-plugin-v1.0.0.zip。
+    """
+    parts = plugin_id.split(".")
+    last = parts[-1]
+    if not last:
+        print(
+            f"警告: 插件 id {plugin_id!r} 无法提取末段短名，"
+            "产物名将使用完整 id 并保留点号。"
+        )
+        return plugin_id
+    return last
+
+
+def check_manifest_short_id(plugin_id: str) -> None:
+    """校验插件 id 末段短名与 Cargo 包名命名族 zerolaunch-plugin-* 的一致性。
+
+    产物名取自 manifest id 末段而非 Cargo 包名（Cargo 包名无法从 id 推导）；
+    仅当 Cargo 包名已是 zerolaunch-plugin-X 形式而 X 与短 id 不符（fork 时
+    只改了 manifest id、漏改包名）才告警。模板原装包名 zerolaunch-hello-world-plugin
+    属 fork 前状态，不触发。
+    """
+    short = plugin_id.split(".")[-1]
+    cargo_toml = load_toml(ROOT / "Cargo.toml")
+    package_name = cargo_toml["package"]["name"]
+    if short and package_name.startswith("zerolaunch-plugin-") and not package_name.endswith(short):
+        print(
+            f"警告: manifest 插件短 id {short!r} 与 Cargo 包名 {package_name!r} 不一致，"
+            "产物将按短 id 命名。fork 插件时建议包名取 zerolaunch-plugin-<短id>。"
+        )
 
 
 def build_release(target: str | None) -> None:
@@ -176,6 +215,13 @@ def main() -> int:
     package_name = cargo_toml["package"]["name"]
     plugin_id = manifest["plugin"]["id"]
     plugin_version = manifest["plugin"]["version"]
+    if "version" in cargo_toml["package"] and cargo_toml["package"]["version"] != plugin_version:
+        print(
+            f"警告: Cargo.toml 版本 {cargo_toml['package']['version']!r} 与 "
+            f"manifest 版本 {plugin_version!r} 不一致，产物按 manifest 版本命名。"
+        )
+    check_manifest_short_id(plugin_id)
+    short_id = short_plugin_id(plugin_id)
 
     if not args.no_build:
         build_release(args.target)
@@ -192,11 +238,11 @@ def main() -> int:
     entries = collect_entries(manifest, binary)
     out_dir = ROOT / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{plugin_id}-{plugin_version}.zip"
+    out_path = out_dir / f"zerolaunch-plugin-{short_id}-v{plugin_version}.zip"
     write_zip(entries, out_path)
     print(f"打包完成: {out_path}（共 {len(entries)} 个文件）")
     print("安装: 设置 → 插件管理 → 安装本地插件，选择该 zip；")
-    print("      或手动解压到 %USERPROFILE%/.ZeroLaunch-rs/plugins/<plugin-id>/。")
+    print(f"      或手动解压到 %USERPROFILE%/.ZeroLaunch-rs/plugins/{plugin_id}/。")
     return 0
 
 

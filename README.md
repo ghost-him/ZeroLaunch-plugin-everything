@@ -14,7 +14,6 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 
 - Windows x86_64（Everything SDK 仅提供 64 位 DLL，插件二进制同样仅构建该目标）。
 - 本机已安装并运行 [Everything](https://www.voidtools.com/)（SDK 查询依赖 Everything 服务）。
-- ZeroLaunch 宿主 `>= 0.1.0`（`manifest.toml` 的 `minHostVersion`）。
 
 ## 使用
 
@@ -84,7 +83,7 @@ python package.py --out <目录>       # 指定输出目录（默认 ./dist）
 
 无系统 Python 时：`uv run package.py`。
 
-产物 `dist/com.ghost-him.everything-<version>.zip`，zip 布局：`manifest.toml` 位于根、`bin/zerolaunch-plugin-everything.exe`、`ui/`、`i18n/`、`Everything64.dll`（extra/ 内容并入根）。
+产物 `dist/zerolaunch-plugin-everything-v<版本号>.zip`（插件短id = manifest `[plugin].id` 末段，如 `com.ghost-him.everything` → `everything`），zip 布局：`manifest.toml` 位于根、`bin/zerolaunch-plugin-everything.exe`、`ui/`、`i18n/`、`Everything64.dll`（extra/ 内容并入根）。
 
 ## 安装
 
