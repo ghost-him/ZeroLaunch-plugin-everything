@@ -4,6 +4,14 @@ name = "Everything 搜索"
 version = "0.1.0"
 description = "Everything 文件搜索集成：触发词 ev / every 后输入查询，Enter 打开文件，路径匹配开关在结果动作中"
 author = "ghost-him"
+# 插件形态：inline = 触发词路由（行内）；panel = 候选项/热键唤醒（接管搜索窗口）
+mode = "panel"
+# 全局唤醒快捷键（仅 panel 形态注册，如 "Ctrl+E"）
+hotkey = "Ctrl+E"
+# 触发关键词：panel 形态下作为默认候选项的匹配关键字（用户输入 ev / every 显示本插件）
+triggerKeywords = ["ev", "every"]
+supportedOs = ["windows"]
+priority = 100
 
 [runtime]
 command = "bin/zerolaunch-plugin-everything.exe"
@@ -17,3 +25,7 @@ provides = ["plugin"]
 
 [ui]
 panelEntry = "ui/panel.mjs"
+
+[icon]
+# 插件图标（相对插件目录；随包分发，Release 一同上传同名附件供市场卡片展示）
+path = "icon.svg"

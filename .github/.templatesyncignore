@@ -1,0 +1,17 @@
+# 模板同步时保留本仓库内容（不随模板覆盖）的业务文件。
+# 语法同 .gitignore（git pathspec）；本文件自身不参与同步，插件仓库可各自增删。
+# 模板仓库里的这份文件只作为新建插件仓库的初始种子。
+#
+# 约定：src/main.rs 是同步的启动骨架（勿改），src/plugin.rs 是你自己的插件实现。
+# 插件追加业务模块时放到 src/plugin/ 下（Rust 子模块目录），并把 src/plugin/ 加进本清单。
+src/plugin.rs
+src/plugin/
+ui/
+i18n/
+Cargo.toml
+Cargo.lock
+manifest.toml
+README.md
+extra/
+# 插件自己的品牌图标；模板仓库的 icon.svg 只是示例，不要覆盖本仓库的
+icon.svg

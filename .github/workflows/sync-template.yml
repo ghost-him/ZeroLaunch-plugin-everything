@@ -1,0 +1,41 @@
+# 插件仓库侧入口：从模板同步框架文件，有差异时提 PR。
+# 本文件在模板与各插件仓库中逐字节一致（由同步自身维护），改动请在模板仓库进行。
+name: 同步模板框架
+
+on:
+  # 定时兜底：每周一 02:23 UTC（GitHub 高峰时段可能延迟）；模板刚改完可手动触发
+  schedule:
+    - cron: "23 2 * * 1"
+  # 手动触发
+  workflow_dispatch:
+
+jobs:
+  repo-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # action 会 gh label create 建标签；建不出来会连带 PR 创建失败
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # 用 PAT 时必须关掉凭证持久化（action 自行处理 git 凭证）
+          persist-credentials: false
+
+      - name: actions-template-sync
+        uses: AndreasAugustin/actions-template-sync@v2
+        with:
+          source_repo_path: ghost-him/ZeroLaunch-plugin-template
+          upstream_branch: main
+          pr_title: 同步模板的变更
+          pr_commit_msg: 同步模板的变更
+          pr_body: |
+            模板框架文件同步（自动生成）：${SOURCE_REPO} @ ${TEMPLATE_GIT_HASH}。
+            `src/`、`ui/`、`i18n/`、`Cargo.*`、`manifest.toml`、`README.md` 按 `.templatesyncignore` 保留本仓库内容，模板若改动了这些文件需人工对照处理。
+          pr_labels: template_sync
+          # 同步会推 .github/workflows/ 下的文件，GITHUB_TOKEN 没有 workflow 权限；
+          # 未配置 PAT 时退化为默认 token（改动 workflows 那一次会失败）
+          target_gh_token: ${{ secrets.TEMPLATE_SYNC_TOKEN || github.token }}

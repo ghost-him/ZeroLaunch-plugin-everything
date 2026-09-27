@@ -30,7 +30,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 
 ## 配置
 
-设置页可配置项（`src/main.rs` `setting_schema()`）：
+设置页可配置项（`src/plugin.rs` `setting_schema()`）：
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
@@ -59,19 +59,25 @@ Enter → host.executeAction("open", { path }) → 宿主 shell_open
 ## 项目结构
 
 ```
-├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api / plugin-protocol（0.1）
-├── manifest.toml       # 插件清单（id、触发词、热键、面板入口），打包时位于 zip 根
-├── src/main.rs         # EverythingPlugin（Plugin + Configurable trait 实现）
+├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（0.2）
+├── manifest.toml       # 插件清单（必填 [plugin] 元数据 + 运行时命令、热键、面板入口），打包时位于 zip 根
+├── icon.svg            # 插件图标（清单 [icon] 声明，随包分发并作为 Release 附件供市场卡片展示）
+├── src/main.rs         # 启动骨架（init() + app().run()，随模板同步，尽量别改）
+├── src/plugin.rs       # EverythingPlugin（Plugin + Configurable trait 实现）+ app() 装配
 ├── ui/panel.mjs        # 沉浸式面板（Shadow DOM 内挂载，宿主 CSS 变量自动跟随主题）
 ├── i18n/               # 语言包（zh-Hans / en，host 加载时合并进翻译目录）
 ├── extra/              # Everything64.dll（打包时并入 zip 根，与 exe 同目录）
 ├── package.py          # 打包脚本（Python 3.11+，tomllib 标准库）
-└── .github/workflows/ci.yml   # CI：cargo check + release 构建 + 打包
+└── .github/workflows/  # CI（check/build/打包）、推 tag 自动发 Release、模板同步入口
 ```
 
-插件只依赖 SDK crates（trait/类型 + `run()`/`host()`），不依赖 Tauri/宿主源码；独立于宿主 workspace 构建。
+插件只依赖 SDK crates（trait/类型 + `host()`），不依赖 Tauri/宿主源码；独立于宿主 workspace 构建。`src/main.rs` 属同步集合（会被模板版本覆盖），业务逻辑一律写 `src/plugin.rs`。
 
 ## 构建与打包
+
+推 tag 自动发布（`.github/workflows/release.yml`，随模板同步下发）：`git tag v0.1.0 && git push origin v0.1.0` —— GitHub Actions 构建 + 打包，把 `dist/zerolaunch-plugin-<短id>-v<版本>.zip` 作为附件发到 Release。要求 tag 形如 `v<major>.<minor>.<patch>`，且与 `manifest.toml [plugin].version`、`Cargo.toml version` 三处一致（不一致直接失败）。补发：Actions → 「发布插件」→ Run workflow，填该 tag。
+
+本地打包（同一套流程）：
 
 ```bash
 cargo check                 # 零错误冒烟
@@ -84,6 +90,7 @@ python package.py --out <目录>       # 指定输出目录（默认 ./dist）
 无系统 Python 时：`uv run package.py`。
 
 产物 `dist/zerolaunch-plugin-everything-v<版本号>.zip`（插件短id = manifest `[plugin].id` 末段，如 `com.ghost-him.everything` → `everything`），zip 布局：`manifest.toml` 位于根、`bin/zerolaunch-plugin-everything.exe`、`ui/`、`i18n/`、`Everything64.dll`（extra/ 内容并入根）。
+插件市场按 `/releases/latest` 的这个 zip 附件自动安装，别改产物名与 zip 布局。
 
 ## 安装
 

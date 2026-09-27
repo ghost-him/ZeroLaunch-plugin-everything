@@ -11,6 +11,9 @@
     uv run --python 3.12 python package.py
 
 产物: <输出目录>/zerolaunch-plugin-<插件短id>-v<版本号>.zip
+      以及宿主插件市场用的元数据附件: <输出目录>/manifest.toml（清单原文）
+      与 <输出目录>/<图标文件名>（仅当 manifest 声明 [icon] 时）——两项都必须
+      随 Release 上传，否则市场卡片拿不到图标与清单信息（安装不受影响）。
 
 插件短id = manifest [plugin].id 去掉域名前缀后的末段
 （如 com.ghost-him.everything → everything，com.example.hello-world → hello-world）；
@@ -149,6 +152,26 @@ def locate_binary(package_name: str, target: str | None) -> Path:
     )
 
 
+def resolve_icon(manifest: dict) -> tuple[Path, str] | None:
+    """解析 manifest [icon].path 为 (磁盘路径, zip 内相对路径)；未声明/非法/缺失返回 None。
+
+    图标必须是插件目录内的相对路径（绝对路径、`..` 逃逸一律告警跳过）；
+    缺失时同样告警跳过（图标缺失不阻断打包，宿主也不阻断加载）。
+    """
+    icon = (manifest.get("icon") or {}).get("path")
+    if not icon:
+        return None
+    icon_rel = Path(icon)
+    if icon_rel.is_absolute() or icon_rel.name in ("", "..") or icon.startswith(".."):
+        print(f"警告: manifest [icon].path 必须是插件目录内的相对路径（当前: {icon!r}），已跳过。")
+        return None
+    icon_disk = ROOT / icon
+    if not icon_disk.is_file():
+        print(f"警告: manifest 声明了 icon {icon!r} 但文件不存在，已跳过。")
+        return None
+    return icon_disk, icon_rel.as_posix()
+
+
 def collect_entries(manifest: dict, binary: Path) -> list[tuple[Path, str]]:
     """收集打包条目 (磁盘路径, zip 内相对路径)，全部位于 zip 根，避免公共前缀歧义。
 
@@ -174,16 +197,29 @@ def collect_entries(manifest: dict, binary: Path) -> list[tuple[Path, str]]:
         for p in sorted(extra.rglob("*")):
             if p.is_file():
                 entries.append((p, p.relative_to(extra).as_posix()))
-    icon = (manifest.get("icon") or {}).get("path")
-    if icon:
-        icon_rel = Path(icon)
-        if icon_rel.is_absolute() or icon_rel.name in ("", "..") or icon.startswith(".."):
-            print(f"警告: manifest [icon].path 必须是插件目录内的相对路径（当前: {icon!r}），已跳过。")
-        elif (ROOT / icon).is_file():
-            entries.append((ROOT / icon, icon_rel.as_posix()))
-        else:
-            print(f"警告: manifest 声明了 icon {icon!r} 但文件不存在，已跳过。")
+    icon = resolve_icon(manifest)
+    if icon is not None:
+        entries.append(icon)
     return entries
+
+
+def write_market_metadata(manifest: dict, out_dir: Path) -> list[Path]:
+    """产出宿主插件市场的元数据附件：manifest.toml 原文 + 图标文件（按文件名）。
+
+    宿主市场卡片直接读 Release 的这两个附件展示图标与清单信息，无需下载整包；
+    图标附件名取图标文件自身文件名（Release 附件名不含目录分隔符，宿主按
+    manifest [icon].path 的末段匹配）。返回已写出的文件路径列表。
+    """
+    manifest_dest = out_dir / "manifest.toml"
+    manifest_dest.write_bytes((ROOT / "manifest.toml").read_bytes())
+    written: list[Path] = [manifest_dest]
+    icon = resolve_icon(manifest)
+    if icon is not None:
+        icon_disk, _ = icon
+        icon_dest = out_dir / icon_disk.name
+        icon_dest.write_bytes(icon_disk.read_bytes())
+        written.append(icon_dest)
+    return written
 
 
 def write_zip(entries: list[tuple[Path, str]], out_path: Path) -> None:
@@ -240,7 +276,9 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"zerolaunch-plugin-{short_id}-v{plugin_version}.zip"
     write_zip(entries, out_path)
+    metadata = write_market_metadata(manifest, out_dir)
     print(f"打包完成: {out_path}（共 {len(entries)} 个文件）")
+    print("市场元数据附件: " + "、".join(p.name for p in metadata) + "（须与 zip 一同上传 Release）")
     print("安装: 设置 → 插件管理 → 安装本地插件，选择该 zip；")
     print(f"      或手动解压到 %USERPROFILE%/.ZeroLaunch-rs/plugins/{plugin_id}/。")
     return 0

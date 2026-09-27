@@ -1,0 +1,94 @@
+# 推 tag（v*）时自动构建 → 打包 → 发 Release：插件市场按 /releases/latest 的
+# zerolaunch-plugin-*.zip 附件安装（附件由 package.py 产出，manifest.toml 在 zip 根），
+# 同时上传 dist/ 下的市场元数据附件（manifest.toml 与图标文件）供市场卡片展示
+# 图标与清单信息。
+# 本文件在模板与各插件仓库中逐字节一致（由模板同步维护），改动请在模板仓库进行。
+name: 发布插件
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签（须是已存在的 tag，如 v0.1.0；补发时用）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # 模板自身打 tag 是同步边界（触发下游同步），不发示例插件的 Release
+    if: github.repository != 'ghost-him/ZeroLaunch-plugin-template'
+    runs-on: windows-latest # 产物是 Windows exe
+    steps:
+      - name: 检出
+        uses: actions/checkout@v7
+        with:
+          # 手动补发时检出该 tag 的提交（否则构建的是 dispatch 所在分支的代码）；
+          # tag 不存在时这一步直接失败
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust 缓存
+        uses: Swatinem/rust-cache@v2
+
+      - name: 解析 tag 并校验版本三处一致
+        id: meta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "${{ github.event.inputs.tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = $env:GITHUB_REF -replace '^refs/tags/', '' }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "标签格式应为 v<major>.<minor>.<patch>（当前: $tag）" }
+
+          # 产物名取 manifest 版本，tag 与 manifest / Cargo 不一致会发出版本号错的附件
+          $version = $tag.Substring(1)
+          $meta = python -c "import json, tomllib; m = tomllib.load(open('manifest.toml','rb')); c = tomllib.load(open('Cargo.toml','rb')); print(json.dumps([m['plugin']['version'], c['package']['version']]))" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $meta.Count -ne 2) {
+            throw "读取版本失败：需要 Python 3.11+，且 manifest.toml / Cargo.toml 可解析"
+          }
+          $manifestVersion = $meta[0]
+          $cargoVersion = $meta[1]
+          if ($manifestVersion -ne $version -or $cargoVersion -ne $version) {
+            throw "版本不一致: tag=$version, manifest.toml=$manifestVersion, Cargo.toml=$cargoVersion（三处必须一致）"
+          }
+
+          "TAG=$tag" >> $env:GITHUB_OUTPUT
+          echo "发布 $tag（manifest.toml / Cargo.toml 版本均为 $version）"
+
+      - name: 构建并打包
+        run: python package.py # cargo build --release + dist/zerolaunch-plugin-<短id>-v<版本>.zip
+
+      - name: 校验发布产物
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path dist/*.zip)) { throw "dist/ 下没有插件包 zip（package.py 产物缺失）" }
+          # 市场元数据附件：宿主插件市场靠它展示图标与清单信息，缺了卡片就只剩仓库描述
+          if (-not (Test-Path dist/manifest.toml)) { throw "dist/ 下缺少市场元数据附件 manifest.toml" }
+          Get-ChildItem dist | Select-Object -ExpandProperty Name
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.TAG }}
+          # dist/* 同时上传插件包与市场元数据附件（manifest.toml、图标文件）
+          files: dist/*
+          fail_on_unmatched_files: true # 打包没产出附件时直接失败
+          generate_release_notes: true # 用 GitHub 自动生成的变更说明
+          draft: false
+          prerelease: false
