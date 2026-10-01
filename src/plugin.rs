@@ -323,6 +323,157 @@ fn parse_sort(kind: &str) -> EverythingSort {
     }
 }
 
+/// 用记事本打开指定文件（Windows）。
+///
+/// 直接 spawn `notepad.exe` 并以参数数组传路径，不经 shell 拼接（避免路径中的
+/// 空格/`&`/`(` 等字符被解释）。子进程 stdio 全部置空：插件 stdout 是 JSON-RPC
+/// 管道，GUI 进程继承写端会拖住宿主侧的管道关闭。
+#[cfg(target_os = "windows")]
+fn open_with_notepad(path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    if !Path::new(path).exists() {
+        return Err(format!("文件不存在: {path}"));
+    }
+
+    Command::new("notepad.exe")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 在资源管理器中打开文件所在目录并选中该文件（Windows）。
+///
+/// 用 `raw_arg` 传原始片段：`explorer` 的 `/select,` 后必须紧跟带引号的路径，
+/// 而 Rust 默认的参数转义会再包一层引号破坏该语法。explorer 成功时也返回
+/// 退出码 1，故只判 spawn 是否成功、不等待子进程。
+#[cfg(target_os = "windows")]
+fn reveal_in_explorer(path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    if !Path::new(path).exists() {
+        return Err(format!("文件不存在: {path}"));
+    }
+
+    // Everything 返回的是 `\` 分隔路径；兼容上游可能带 `/` 的情况
+    let windows_path = path.replace('/', "\\");
+
+    Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{windows_path}\""))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 把文本写入系统剪贴板（Windows，`CF_UNICODETEXT`）。
+///
+/// 宿主协议未向插件暴露剪贴板能力（宿主 `set_clipboard_text` 仅进程内可用），
+/// 故由插件进程直连 Win32。剪贴板是全局独占资源，`OpenClipboard` 失败即表示
+/// 被其它进程占用；无论后续哪一步失败都必须 `CloseClipboard`，否则剪贴板被本
+/// 进程锁死。
+#[cfg(target_os = "windows")]
+fn set_clipboard_text(text: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
+    use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+
+    // CF_UNICODETEXT 约定：UTF-16 且以 NUL 结尾
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    wide.push(0);
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err("打开剪贴板失败（可能被其它进程占用）".to_string());
+        }
+        let result = (|| -> Result<(), String> {
+            if EmptyClipboard() == 0 {
+                return Err("清空剪贴板失败".to_string());
+            }
+            let hmem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * std::mem::size_of::<u16>());
+            if hmem.is_null() {
+                return Err("分配剪贴板内存失败".to_string());
+            }
+            let dst = GlobalLock(hmem) as *mut u16;
+            if dst.is_null() {
+                return Err("锁定剪贴板内存失败".to_string());
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
+            GlobalUnlock(hmem);
+            // 成功后 hmem 所有权移交系统，不能自行释放
+            if SetClipboardData(u32::from(CF_UNICODETEXT), hmem).is_null() {
+                return Err("写入剪贴板失败".to_string());
+            }
+            Ok(())
+        })();
+        CloseClipboard();
+        result
+    }
+}
+
+/// 非 Windows 平台：Everything 插件本身依赖 Windows SDK，三项平台动作直接拒绝。
+#[cfg(not(target_os = "windows"))]
+fn open_with_notepad(_path: &str) -> Result<(), String> {
+    Err("仅 Windows 支持".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn reveal_in_explorer(_path: &str) -> Result<(), String> {
+    Err("仅 Windows 支持".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_clipboard_text(_text: &str) -> Result<(), String> {
+    Err("仅 Windows 支持".to_string())
+}
+
+/// 路径类动作统一入口：`open` / `open_folder` 交宿主 Shell 打开，其余三项由插件
+/// 进程内的 Windows 调用完成（记事本、资源管理器选中、剪贴板）。
+async fn run_path_action(action_id: &str, path: &str) -> Result<(), PluginError> {
+    match action_id {
+        "open" => host()
+            .shell_open(path)
+            .await
+            .map_err(|e| PluginError::ActionFailed(format!("打开失败: {e}, 路径: {path}")))?,
+        "open_folder" => {
+            let parent = Path::new(path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string());
+            host().shell_open_folder(&parent).await.map_err(|e| {
+                PluginError::ActionFailed(format!("打开文件夹失败: {e}, 路径: {parent}"))
+            })?;
+        }
+        "open_with_notepad" => open_with_notepad(path).map_err(|e| {
+            PluginError::ActionFailed(format!("用记事本打开失败: {e}, 路径: {path}"))
+        })?,
+        "open_file_location" => reveal_in_explorer(path).map_err(|e| {
+            PluginError::ActionFailed(format!("打开文件位置失败: {e}, 路径: {path}"))
+        })?,
+        "copy_path" => {
+            set_clipboard_text(path)
+                .map_err(|e| PluginError::ActionFailed(format!("复制路径失败: {e}")))?;
+        }
+        other => return Err(PluginError::ActionFailed(format!("未知路径动作: {other}"))),
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Configurable for EverythingPlugin {
     fn core(&self) -> &ComponentCore {
@@ -574,7 +725,8 @@ impl Plugin for EverythingPlugin {
         }
     }
 
-    /// 执行动作：open / open_folder 按候选 id 还原路径并交由宿主打开；
+    /// 执行动作：路径类动作（open / open_folder / open_with_notepad /
+    /// open_file_location / copy_path）从载荷取 `{ "path": "..." }` 后统一分发；
     /// toggle_path_match 翻转路径匹配开关（后续查询生效）。
     async fn execute_action(
         &self,
@@ -582,29 +734,19 @@ impl Plugin for EverythingPlugin {
         action_id: &str,
         payload: serde_json::Value,
     ) -> Result<(), PluginError> {
+        // 沉浸式面板动作载荷为自由 JSON：{ "path": "..." }（面板直传完整路径）
+        if matches!(
+            action_id,
+            "open" | "open_folder" | "open_with_notepad" | "open_file_location" | "copy_path"
+        ) {
+            let path = payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| PluginError::ActionFailed("载荷缺少路径（path）".to_string()))?;
+            return run_path_action(action_id, path).await;
+        }
+
         match action_id {
-            "open" | "open_folder" => {
-                // 沉浸式面板动作载荷为自由 JSON：{ "path": "..." }（面板直传完整路径）
-                let path = payload
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-                    .ok_or_else(|| PluginError::ActionFailed("载荷缺少路径（path）".to_string()))?;
-                if action_id == "open" {
-                    host().shell_open(&path).await.map_err(|e| {
-                        PluginError::ActionFailed(format!("打开失败: {e}, 路径: {path}"))
-                    })?;
-                } else {
-                    let parent = Path::new(&path)
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.clone());
-                    host().shell_open_folder(&parent).await.map_err(|e| {
-                        PluginError::ActionFailed(format!("打开文件夹失败: {e}, 路径: {parent}"))
-                    })?;
-                }
-                Ok(())
-            }
             "toggle_path_match" => {
                 let mut state = self.state.write();
                 state.enable_path_match = !state.enable_path_match;

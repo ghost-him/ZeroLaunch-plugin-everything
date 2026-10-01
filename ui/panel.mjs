@@ -8,6 +8,8 @@
 //   items 时直接展示，无需重复查询；
 // - Enter 打开选中项 → host.executeAction('open', { path }) → pluginAction 通道；
 // - Ctrl+Enter 打开选中项所在文件夹 → host.executeAction('open_folder', { path })；
+// - 结果项右键 → 面板内菜单：打开文件 / 用记事本打开 / 打开文件位置 / 复制路径，
+//   前一项复用宿主 Shell 能力，后三项由插件进程内的 Windows 调用完成；
 // - 方向键 / Enter / Ctrl+Enter 监听在宿主窗口（鼠标点击结果项后焦点落到 body 也不失效），
 //   卸载时经 host.onDestroy 解绑；
 // - Esc / Ctrl+U 不在此拦截：声明在插件的 interaction_policy bindings 中，
@@ -30,6 +32,8 @@ export default function mount(rootEl, host) {
          Shadow DOM 内继承宿主自定义属性——宿主切换主题时自动跟随，无需 IPC。 */
       .ev-panel {
         display: flex; flex-direction: column; height: 100%;
+        /* 右键菜单以面板为定位参照（面板铺满窗口，绝对定位不受祖先 transform 影响） */
+        position: relative;
         background: var(--bg-primary); color: var(--text-primary);
         font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
         user-select: none;
@@ -106,6 +110,29 @@ export default function mount(rootEl, host) {
         background: var(--bg-secondary); border: 1px solid var(--border-color);
         border-radius: 3px; padding: 0 5px; font-size: 11px; color: var(--text-secondary);
       }
+      /* 右键菜单：与宿主 ContextMenu.vue 同一视觉语言（同套变量、无图标） */
+      .ev-menu {
+        position: absolute; z-index: 20; min-width: 148px;
+        padding: 4px 0;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-md);
+      }
+      .ev-menu-item {
+        padding: 6px 14px; font-size: var(--font-size-sm); cursor: pointer;
+        white-space: nowrap;
+      }
+      .ev-menu-item:hover { background: var(--bg-secondary); }
+      .ev-notice {
+        position: absolute; right: 16px; bottom: 42px; z-index: 20;
+        max-width: 70%;
+        padding: 6px 12px; border-radius: var(--radius-sm);
+        background: var(--bg-secondary); border: 1px solid var(--border-color);
+        font-size: var(--font-size-sm); color: var(--text-secondary);
+        box-shadow: var(--shadow-md);
+      }
+      .ev-notice.error { color: var(--text-error); }
     </style>
     <div class="ev-panel">
       <div class="ev-search">
@@ -114,9 +141,11 @@ export default function mount(rootEl, host) {
         <span class="ev-badge highlight" id="ev-sortbadge" hidden></span>
       </div>
       <div class="ev-list" id="ev-list"></div>
+      <div class="ev-menu" id="ev-menu" hidden></div>
+      <div class="ev-notice" id="ev-notice" hidden></div>
       <div class="ev-status">
         <span class="ev-pathmatch" id="ev-pathmatch"></span>
-        <span class="ev-hints"><kbd>↑↓</kbd> ${host.t('panelNavHint')} · <kbd>Enter</kbd> ${host.t('panelOpenHint')} · <kbd>Ctrl+Enter</kbd> ${host.t('panelOpenFolderHint')} · <kbd>Ctrl+U</kbd> ${host.t('panelPathMatchHint')} · <kbd>Esc</kbd> ${host.t('panelExitHint')}</span>
+        <span class="ev-hints"><kbd>↑↓</kbd> ${host.t('panelNavHint')} · <kbd>Enter</kbd> ${host.t('panelOpenHint')} · <kbd>Ctrl+Enter</kbd> ${host.t('panelOpenFolderHint')} · <kbd>Ctrl+U</kbd> ${host.t('panelPathMatchHint')} · <kbd>${host.t('panelContextKey')}</kbd> ${host.t('panelContextHint')} · <kbd>Esc</kbd> ${host.t('panelExitHint')}</span>
       </div>
     </div>
   `
@@ -126,6 +155,9 @@ export default function mount(rootEl, host) {
   const countEl = rootEl.querySelector('#ev-count')
   const sortBadgeEl = rootEl.querySelector('#ev-sortbadge')
   const pathMatchEl = rootEl.querySelector('#ev-pathmatch')
+  const menuEl = rootEl.querySelector('#ev-menu')
+  const noticeEl = rootEl.querySelector('#ev-notice')
+  const panelEl = rootEl.querySelector('.ev-panel')
 
   // 文件类型 → emoji 图标（Everything 面板自渲染，不依赖宿主图标链路）
   const TYPE_ICONS = {
@@ -196,6 +228,7 @@ export default function mount(rootEl, host) {
   }
 
   function applyPanelData(data) {
+    closeMenu()
     state.items = Array.isArray(data?.items) ? data.items.map(normalizeItem) : []
     state.sortSkipped = !!data?.sortSkipped
     if (typeof data?.enablePathMatch === 'boolean') {
@@ -233,6 +266,7 @@ export default function mount(rootEl, host) {
     state.items.forEach((item, i) => {
       const el = document.createElement('div')
       el.className = 'ev-item' + (i === state.selectedIndex ? ' selected' : '')
+      el.dataset.index = String(i)
       el.title = item.path
 
       const iconGlyph = iconFor(item)
@@ -289,6 +323,8 @@ export default function mount(rootEl, host) {
   }
 
   async function search() {
+    // 结果集即将重建：菜单的目标路径可能已不在列表中
+    closeMenu()
     const text = input.value.trim()
     const seq = ++state.querySeq
     if (text.length === 0) {
@@ -322,22 +358,96 @@ export default function mount(rootEl, host) {
     }
   }
 
+  // 动作分发：快捷键与右键菜单共用。失败在面板内提示（插件回传的失败原因是中文原文）。
+  function runAction(actionId, path) {
+    const target = path ?? state.items[state.selectedIndex]?.path
+    if (!target) return
+    host
+      .executeAction(actionId, { path: target })
+      .then(() => {
+        // 复制类动作没有其它可见反馈，成功时给一次轻提示
+        if (actionId === 'copy_path') notify(host.t('panelCopied'))
+      })
+      .catch((e) => {
+        console.error('[everything] 动作失败:', actionId, e)
+        notify(host.t('panelActionFailed') + (e?.message ?? e), true)
+      })
+  }
+
   function openSelected() {
-    const item = state.items[state.selectedIndex]
-    if (!item) return
-    host.executeAction('open', { path: item.path }).catch((e) => {
-      console.error('[everything] 打开失败:', e)
-    })
+    runAction('open')
   }
 
   // 打开选中项所在文件夹：经插件 open_folder 动作打开其父目录
   // （等价 Everything 的「打开路径」；载荷与 Enter 同为 { path }）。
   function openFolderSelected() {
-    const item = state.items[state.selectedIndex]
-    if (!item) return
-    host.executeAction('open_folder', { path: item.path }).catch((e) => {
-      console.error('[everything] 打开所在文件夹失败:', e)
-    })
+    runAction('open_folder')
+  }
+
+  // ===== 右键菜单 =====
+  // 菜单项与插件 execute_action 的动作 id 一一对应，文案走插件语言包；
+  // 目标路径在菜单弹出时快照，之后变化选中项不影响已弹出的菜单。
+  const MENU_ITEMS = [
+    { action: 'open', labelKey: 'menuOpen' },
+    { action: 'open_with_notepad', labelKey: 'menuOpenWithNotepad' },
+    { action: 'open_file_location', labelKey: 'menuOpenLocation' },
+    { action: 'copy_path', labelKey: 'menuCopyPath' },
+  ]
+  let menuPath = null
+
+  function showMenu(path, x, y) {
+    menuPath = path
+    menuEl.innerHTML = MENU_ITEMS.map(
+      (item) => `<div class="ev-menu-item" data-action="${item.action}">${host.t(item.labelKey)}</div>`,
+    ).join('')
+    menuEl.hidden = false
+    // 先渲染后测量，再按面板边界收敛，避免菜单超出可视区域
+    const bounds = panelEl.getBoundingClientRect()
+    const size = menuEl.getBoundingClientRect()
+    const left = Math.max(4, Math.min(x - bounds.left, bounds.width - size.width - 4))
+    const top = Math.max(4, Math.min(y - bounds.top, bounds.height - size.height - 4))
+    menuEl.style.left = `${left}px`
+    menuEl.style.top = `${top}px`
+  }
+
+  function closeMenu() {
+    if (menuEl.hidden) return
+    menuEl.hidden = true
+    menuPath = null
+  }
+
+  menuEl.addEventListener('click', (e) => {
+    const entry = e.target.closest('.ev-menu-item')
+    if (!entry) return
+    const target = menuPath
+    closeMenu()
+    runAction(entry.dataset.action, target)
+  })
+
+  // 面板内右键：命中结果项则选中并弹菜单（与资源管理器一致），否则关闭
+  rootEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    const row = e.target.closest('.ev-item')
+    if (!row) {
+      closeMenu()
+      return
+    }
+    const index = Number(row.dataset.index)
+    state.selectedIndex = index
+    render()
+    showMenu(state.items[index]?.path, e.clientX, e.clientY)
+  })
+
+  // 面板内提示气泡：动作结果的一次性反馈，自动消失
+  let noticeTimer = null
+  function notify(message, isError = false) {
+    noticeEl.textContent = message
+    noticeEl.classList.toggle('error', isError)
+    noticeEl.hidden = false
+    clearTimeout(noticeTimer)
+    noticeTimer = setTimeout(() => {
+      noticeEl.hidden = true
+    }, 2000)
   }
 
   // 宿主重放的面板数据（唤醒时下发；触发词带查询进入时直接展示结果，
@@ -353,6 +463,7 @@ export default function mount(rootEl, host) {
   // 输入防抖 200ms：Everything 查询为阻塞调用，避免每键触发
   let debounceTimer = null
   input.addEventListener('input', () => {
+    closeMenu()
     clearTimeout(debounceTimer)
     debounceTimer = setTimeout(search, 200)
   })
@@ -364,10 +475,13 @@ export default function mount(rootEl, host) {
   function onPanelKeyDown(e) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
+      // 与资源管理器一致：移动选中即收起菜单（菜单已快照自己的目标路径）
+      closeMenu()
       state.selectedIndex = Math.min(state.selectedIndex + 1, Math.max(state.items.length - 1, 0))
       render()
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
+      closeMenu()
       state.selectedIndex = Math.max(state.selectedIndex - 1, 0)
       render()
     } else if (e.key === 'Enter' && e.ctrlKey) {
@@ -379,8 +493,40 @@ export default function mount(rootEl, host) {
       openSelected()
     }
   }
+
+  // 菜单打开时的 Esc 抢占：捕获阶段先于宿主键盘路由（其监听挂在 document 冒泡），
+  // 否则一次 Esc 会在关闭菜单的同时把面板一起退出。
+  function onEscapeCapture(e) {
+    if (e.key === 'Escape' && !menuEl.hidden) {
+      e.preventDefault()
+      e.stopPropagation()
+      closeMenu()
+    }
+  }
+
+  // 点击菜单以外区域关闭（事件源在菜单内则交给 click 处理）
+  function onWindowPointerDown(e) {
+    if (menuEl.hidden) return
+    if (!e.composedPath().includes(menuEl)) closeMenu()
+  }
+
+  function onWindowBlur() {
+    closeMenu()
+  }
+
   window.addEventListener('keydown', onPanelKeyDown)
-  host.onDestroy(() => window.removeEventListener('keydown', onPanelKeyDown))
+  window.addEventListener('keydown', onEscapeCapture, true)
+  window.addEventListener('pointerdown', onWindowPointerDown, true)
+  window.addEventListener('blur', onWindowBlur)
+  listEl.addEventListener('scroll', closeMenu, { passive: true })
+  host.onDestroy(() => {
+    window.removeEventListener('keydown', onPanelKeyDown)
+    window.removeEventListener('keydown', onEscapeCapture, true)
+    window.removeEventListener('pointerdown', onWindowPointerDown, true)
+    window.removeEventListener('blur', onWindowBlur)
+    clearTimeout(debounceTimer)
+    clearTimeout(noticeTimer)
+  })
 
   input.focus()
 }

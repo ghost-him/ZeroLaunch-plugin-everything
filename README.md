@@ -7,6 +7,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 - **Everything 实时检索**：完整路径匹配查询，支持 Everything 原生查询语法（`ext:`、`folder:`、`!` 等，见 Everything 文档）。
 - **沉浸式面板**：面板自渲染结果列表——文件类型 emoji 图标、大小、修改时间、扩展名徽标、所在目录；不依赖宿主 List 管线与图标链路。
 - **打开与定位**：`Enter` 打开文件；`Ctrl+Enter` 打开选中项所在文件夹；双击或动作菜单打开文件；`open_folder` 动作打开所在文件夹。
+- **结果项右键菜单**：右键结果项弹出「打开文件 / 用记事本打开文件 / 打开文件位置 / 复制文件路径」四项。打开文件走宿主 Shell；记事本、资源管理器定位（`explorer /select` 选中文件）、复制路径（写系统剪贴板）由插件进程内的 Windows 调用完成——宿主协议未向插件暴露剪贴板与任意程序启动能力，这三项属纯平台调用。
 - **路径匹配开关**：`Ctrl+U` 切换"匹配完整路径而非仅文件名"（等价 Everything 的 Ctrl+U），即时生效，状态回显在面板底栏。
 - **短查询优化**：查询长度低于排序阈值时跳过排序直接返回，降低短查询（命中项极多）的延迟。
 
@@ -24,10 +25,11 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 | `↑` / `↓` | 选择结果 |
 | `Enter` / 双击 | 打开选中项 |
 | `Ctrl+Enter` | 打开选中项所在文件夹 |
+| 右键结果项 | 更多操作：打开文件 / 用记事本打开文件 / 打开文件位置 / 复制文件路径（复制的是原样路径，不做分隔符转换） |
 | `Ctrl+U` | 切换路径匹配 |
-| `Esc` | 返回宿主默认面板 |
+| `Esc` | 返回宿主默认面板（右键菜单打开时，`Esc` 只关闭菜单） |
 
-面板内输入 200ms 防抖后查询（Everything 查询为阻塞调用，避免每键触发）；`Esc` / `Ctrl+U` 由插件 `interaction_policy` bindings 声明，宿主键盘状态机统一解释执行；方向键 / `Enter` / `Ctrl+Enter` 由面板挂在宿主窗口层监听（鼠标点击结果项后焦点落到 body 也不失效），面板卸载时解绑。
+面板内输入 200ms 防抖后查询（Everything 查询为阻塞调用，避免每键触发）；`Esc` / `Ctrl+U` 由插件 `interaction_policy` bindings 声明，宿主键盘状态机统一解释执行；方向键 / `Enter` / `Ctrl+Enter` 由面板挂在宿主窗口层监听（鼠标点击结果项后焦点落到 body 也不失效），面板卸载时解绑。右键菜单为面板自绘（宿主对第三方面板不提供菜单组件）：面板内右键命中结果项即选中并弹出，点击别处 / 按方向键 / 输入内容 / 窗口失焦均收起。
 
 ## 配置
 
@@ -49,6 +51,11 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
     → 面板 onDataUpdate / host.query 响应 → 自渲染列表
 Enter → host.executeAction("open", { path }) → 宿主 shell_open
 Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folder → 宿主 shell_open_folder（打开父目录）
+右键菜单 → 面板自绘菜单 → host.executeAction(<菜单动作>, { path }) → 插件 execute_action 统一分发：
+    打开文件         → 宿主 shell_open
+    用记事本打开     → 插件 spawn notepad.exe <path>（参数数组传路径，子进程 stdio 置空）
+    打开文件位置     → 插件 spawn explorer.exe /select,"<path>"（raw_arg 保留引号语法）
+    复制文件路径     → 插件 Win32 CF_UNICODETEXT 写系统剪贴板
 ```
 
 - **CustomPanel 数据契约**：`panelData` 为自描述 JSON——`query`、`items`（`path`/`name`/`dir`/`isFolder`/`size`/`modified`(unix 秒)/`extension`）、`sortSkipped`、`enablePathMatch`、`resultLimit`。面板按需自渲染，`keep_search_bar = false`。
