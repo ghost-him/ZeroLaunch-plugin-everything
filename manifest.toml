@@ -2,7 +2,7 @@
 id = "com.ghost-him.everything"
 name = "Everything 搜索"
 version = "0.1.0"
-description = "Everything 文件搜索集成：触发词 ev / every 后输入查询，Enter 打开文件，路径匹配开关在结果动作中"
+description = "Everything 文件搜索集成：触发词 ev / every 后输入查询，Enter 打开文件，Ctrl+Enter 打开所在文件夹，路径匹配开关在结果动作中"
 author = "ghost-him"
 # 插件形态：inline = 触发词路由（行内）；panel = 候选项/热键唤醒（接管搜索窗口）
 mode = "panel"

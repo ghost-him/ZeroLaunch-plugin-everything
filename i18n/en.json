@@ -6,6 +6,7 @@
   "panelPlaceholder": "Search Everything (supports Everything query syntax)",
   "panelNavHint": "select",
   "panelOpenHint": "open",
+  "panelOpenFolderHint": "folder",
   "panelPathMatchHint": "path match",
   "panelExitHint": "exit",
   "panelPathMatchOn": "Path match: on",

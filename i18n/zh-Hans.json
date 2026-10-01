@@ -6,6 +6,7 @@
   "panelPlaceholder": "搜索 Everything（支持 Everything 查询语法）",
   "panelNavHint": "选择",
   "panelOpenHint": "打开",
+  "panelOpenFolderHint": "所在文件夹",
   "panelPathMatchHint": "路径匹配",
   "panelExitHint": "退出",
   "panelPathMatchOn": "路径匹配：开",

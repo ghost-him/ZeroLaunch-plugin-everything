@@ -7,6 +7,9 @@
 // - 唤醒/触发词进入时宿主重放 panelData（onDataUpdate），有 query 与
 //   items 时直接展示，无需重复查询；
 // - Enter 打开选中项 → host.executeAction('open', { path }) → pluginAction 通道；
+// - Ctrl+Enter 打开选中项所在文件夹 → host.executeAction('open_folder', { path })；
+// - 方向键 / Enter / Ctrl+Enter 监听在宿主窗口（鼠标点击结果项后焦点落到 body 也不失效），
+//   卸载时经 host.onDestroy 解绑；
 // - Esc / Ctrl+U 不在此拦截：声明在插件的 interaction_policy bindings 中，
 //   由宿主键盘状态机统一解释（Shadow DOM 内事件冒泡到宿主窗口）；
 // - 文本经 host.t(key) 查插件语言包（与 Rust t_key 同键，key-or-literal）。
@@ -113,7 +116,7 @@ export default function mount(rootEl, host) {
       <div class="ev-list" id="ev-list"></div>
       <div class="ev-status">
         <span class="ev-pathmatch" id="ev-pathmatch"></span>
-        <span class="ev-hints"><kbd>↑↓</kbd> ${host.t('panelNavHint')} · <kbd>Enter</kbd> ${host.t('panelOpenHint')} · <kbd>Ctrl+U</kbd> ${host.t('panelPathMatchHint')} · <kbd>Esc</kbd> ${host.t('panelExitHint')}</span>
+        <span class="ev-hints"><kbd>↑↓</kbd> ${host.t('panelNavHint')} · <kbd>Enter</kbd> ${host.t('panelOpenHint')} · <kbd>Ctrl+Enter</kbd> ${host.t('panelOpenFolderHint')} · <kbd>Ctrl+U</kbd> ${host.t('panelPathMatchHint')} · <kbd>Esc</kbd> ${host.t('panelExitHint')}</span>
       </div>
     </div>
   `
@@ -327,6 +330,16 @@ export default function mount(rootEl, host) {
     })
   }
 
+  // 打开选中项所在文件夹：经插件 open_folder 动作打开其父目录
+  // （等价 Everything 的「打开路径」；载荷与 Enter 同为 { path }）。
+  function openFolderSelected() {
+    const item = state.items[state.selectedIndex]
+    if (!item) return
+    host.executeAction('open_folder', { path: item.path }).catch((e) => {
+      console.error('[everything] 打开所在文件夹失败:', e)
+    })
+  }
+
   // 宿主重放的面板数据（唤醒时下发；触发词带查询进入时直接展示结果，
   // 并将查询词预填到输入框，用户可继续编辑）。
   host.onDataUpdate((data) => {
@@ -345,7 +358,10 @@ export default function mount(rootEl, host) {
   })
 
   // Esc / Ctrl+U 由插件 bindings 声明、宿主键盘状态机处理（此处不拦截，事件冒泡到宿主）。
-  input.addEventListener('keydown', (e) => {
+  // 其余按键挂在宿主窗口而非输入框：鼠标点击结果项后焦点会落到 body（列表项不可聚焦），
+  // 挂在输入框上会让 Enter / 方向键 / Ctrl+Enter 全部失效；窗口级监听在面板挂载期间
+  // 始终有效，卸载时经 host.onDestroy 清理。
+  function onPanelKeyDown(e) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       state.selectedIndex = Math.min(state.selectedIndex + 1, Math.max(state.items.length - 1, 0))
@@ -354,11 +370,17 @@ export default function mount(rootEl, host) {
       e.preventDefault()
       state.selectedIndex = Math.max(state.selectedIndex - 1, 0)
       render()
+    } else if (e.key === 'Enter' && e.ctrlKey) {
+      // Ctrl+Enter：打开选中项所在文件夹（先于 Enter 分支，避免被「打开」吃掉）
+      e.preventDefault()
+      openFolderSelected()
     } else if (e.key === 'Enter') {
       e.preventDefault()
       openSelected()
     }
-  })
+  }
+  window.addEventListener('keydown', onPanelKeyDown)
+  host.onDestroy(() => window.removeEventListener('keydown', onPanelKeyDown))
 
   input.focus()
 }

@@ -6,7 +6,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 
 - **Everything 实时检索**：完整路径匹配查询，支持 Everything 原生查询语法（`ext:`、`folder:`、`!` 等，见 Everything 文档）。
 - **沉浸式面板**：面板自渲染结果列表——文件类型 emoji 图标、大小、修改时间、扩展名徽标、所在目录；不依赖宿主 List 管线与图标链路。
-- **打开与定位**：`Enter` 打开文件；双击或动作菜单打开文件；`open_folder` 动作打开所在文件夹。
+- **打开与定位**：`Enter` 打开文件；`Ctrl+Enter` 打开选中项所在文件夹；双击或动作菜单打开文件；`open_folder` 动作打开所在文件夹。
 - **路径匹配开关**：`Ctrl+U` 切换"匹配完整路径而非仅文件名"（等价 Everything 的 Ctrl+U），即时生效，状态回显在面板底栏。
 - **短查询优化**：查询长度低于排序阈值时跳过排序直接返回，降低短查询（命中项极多）的延迟。
 
@@ -23,10 +23,11 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 | 搜索栏输入 `ev` / `every` + 空格 | 触发词唤起（带查询词时直接展示结果并预填输入框） |
 | `↑` / `↓` | 选择结果 |
 | `Enter` / 双击 | 打开选中项 |
+| `Ctrl+Enter` | 打开选中项所在文件夹 |
 | `Ctrl+U` | 切换路径匹配 |
 | `Esc` | 返回宿主默认面板 |
 
-面板内输入 200ms 防抖后查询（Everything 查询为阻塞调用，避免每键触发）；`Esc` / `Ctrl+U` 由插件 `interaction_policy` bindings 声明，宿主键盘状态机统一解释执行。
+面板内输入 200ms 防抖后查询（Everything 查询为阻塞调用，避免每键触发）；`Esc` / `Ctrl+U` 由插件 `interaction_policy` bindings 声明，宿主键盘状态机统一解释执行；方向键 / `Enter` / `Ctrl+Enter` 由面板挂在宿主窗口层监听（鼠标点击结果项后焦点落到 body 也不失效），面板卸载时解绑。
 
 ## 配置
 
@@ -47,6 +48,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
     → QueryResponse::CustomPanel { panel_type: "everything", data: 自描述 JSON }
     → 面板 onDataUpdate / host.query 响应 → 自渲染列表
 Enter → host.executeAction("open", { path }) → 宿主 shell_open
+Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folder → 宿主 shell_open_folder（打开父目录）
 ```
 
 - **CustomPanel 数据契约**：`panelData` 为自描述 JSON——`query`、`items`（`path`/`name`/`dir`/`isFolder`/`size`/`modified`(unix 秒)/`extension`）、`sortSkipped`、`enablePathMatch`、`resultLimit`。面板按需自渲染，`keep_search_bar = false`。
