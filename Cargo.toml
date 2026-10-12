@@ -1,6 +1,6 @@
 [package]
 name = "zerolaunch-plugin-everything"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -12,24 +12,28 @@ serde_json = "1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
-blake3 = "1.8"
 parking_lot = "0.12"
 
 # Everything SDK 绑定仅支持 Windows x86_64（Everything 服务本身亦仅提供 64 位 SDK DLL）。
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 everything-rs = "0.1.10"
 everything-sys-bindgen = "0.1.5"
-
-# 右键菜单的「用记事本打开 / 打开文件位置 / 复制路径」由插件进程直接完成：
-# 宿主协议未暴露剪贴板与任意程序启动能力（新增宿主方法需协议 + SDK 发版），
-# 这三项属于纯平台调用，放插件侧即可。仅 Windows 需要。
-[target.'cfg(target_os = "windows")'.dependencies]
+# 提权建库经 ShellExecuteEx runas 弹 UAC（静默提权不存在，见 launch elevated 注释），
+# 保留原生调用以便传 `-startup`（宿主 shell_execute_elevation 不支持参数）。
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_System_Ole",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+
+# 剪贴板（右键菜单「复制文件路径」）与随包本体的 Job 管控由第三方库承担：
+# - clipboard-win：Win32 CF_UNICODETEXT 写入（宿主协议未暴露剪贴板能力，见
+#   `set_clipboard_text`）；
+# - win32job：KILL_ON_JOB_CLOSE 的 Job（随包本体跟随插件退出，见 `JobGuard`）。
+[target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "5.4"
+win32job = "2.0"
 
 # 独立于父 workspace（插件为独立分发包，不参与宿主 workspace 构建）
 [workspace]

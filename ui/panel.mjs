@@ -22,6 +22,8 @@ export default function mount(rootEl, host) {
     selectedIndex: 0,
     enablePathMatch: false,
     sortSkipped: false,
+    // 随包实例空库标记（Rust query() 的 emptyBundledIndex）：空态渲染提权建库按钮。
+    emptyBundledIndex: false,
     querySeq: 0,
     inFlight: false,
   }
@@ -98,6 +100,13 @@ export default function mount(rootEl, host) {
       .ev-empty, .ev-error {
         padding: 40px 18px; text-align: center; color: var(--text-secondary); font-size: 13px;
       }
+      /* 空库提权建库按钮：空态提示下的主操作（二次确认态复用同一按钮改文案）。 */
+      .ev-rebuild-btn {
+        display: block; margin: 12px auto 0; padding: 6px 18px;
+        background: var(--accent-color); color: #fff; border: none; border-radius: 6px;
+        font-size: 13px; cursor: pointer;
+      }
+      .ev-rebuild-btn:disabled { opacity: 0.6; cursor: default; }
       .ev-error { color: var(--text-error); }
       .ev-status {
         display: flex; justify-content: space-between; align-items: center;
@@ -231,6 +240,7 @@ export default function mount(rootEl, host) {
     closeMenu()
     state.items = Array.isArray(data?.items) ? data.items.map(normalizeItem) : []
     state.sortSkipped = !!data?.sortSkipped
+    state.emptyBundledIndex = !!data?.emptyBundledIndex
     if (typeof data?.enablePathMatch === 'boolean') {
       state.enablePathMatch = data.enablePathMatch
       renderPathMatch()
@@ -246,6 +256,30 @@ export default function mount(rootEl, host) {
     pathMatchEl.classList.toggle('on', state.enablePathMatch)
   }
 
+  // 空库提权建库：二次确认（UAC 不可静默，必须用户显式点）后经面板动作通道
+  // 转发 rebuild_index_elevated——与右键菜单动作同一条通道（host.executeAction
+  // → bridge_confirm/pluginAction），宿主按活动会话校验归属与代际。
+  function rebuildIndexElevated(btn) {
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1'
+      btn.textContent = host.t('panelRebuildConfirm')
+      return
+    }
+    btn.disabled = true
+    btn.textContent = host.t('panelRebuilding')
+    host
+      .executeAction('rebuild_index_elevated', {})
+      .then(() => notify(host.t('panelRebuildStarted'), false))
+      .catch((e) => {
+        // 失败（未确认 UAC / 找不到 exe）后复位按钮，允许重试
+        console.error('[everything] 提权建库失败:', e)
+        btn.disabled = false
+        btn.dataset.armed = '0'
+        btn.textContent = host.t('panelRebuildNow')
+        notify(host.t('panelActionFailed') + (e?.message ?? e), true)
+      })
+  }
+
   function render() {
     countEl.textContent = state.inFlight
       ? host.t('panelSearching')
@@ -258,6 +292,16 @@ export default function mount(rootEl, host) {
       return
     }
     if (state.items.length === 0) {
+      // 随包空库：提示 + 提权建库按钮（裸机普通权限建不起索引，需 UAC 提权一次）。
+      if (state.emptyBundledIndex) {
+        listEl.innerHTML = `<div class="ev-empty">${host.t('panelEmptyIndex')}</div>`
+        const btn = document.createElement('button')
+        btn.className = 'ev-rebuild-btn'
+        btn.textContent = host.t('panelRebuildNow')
+        btn.addEventListener('click', () => rebuildIndexElevated(btn))
+        listEl.appendChild(btn)
+        return
+      }
       listEl.innerHTML = `<div class="ev-empty">${host.t('panelEmpty')}</div>`
       return
     }
@@ -304,12 +348,13 @@ export default function mount(rootEl, host) {
 
   // 响应适配：CustomPanel（面板原生）与 List 回退（宿主旧管线）统一为 items
   function normalizeResponse(resp) {
-    if (!resp) return { items: [], sortSkipped: false }
+    if (!resp) return { items: [], sortSkipped: false, emptyBundledIndex: false }
     if (resp.mode === 'plugin_immersive' || resp.mode === 'plugin_panel') {
       return {
         items: Array.isArray(resp.panelData?.items) ? resp.panelData.items : [],
         sortSkipped: !!resp.panelData?.sortSkipped,
         enablePathMatch: resp.panelData?.enablePathMatch,
+        emptyBundledIndex: !!resp.panelData?.emptyBundledIndex,
       }
     }
     if (resp.mode === 'search') {
@@ -317,9 +362,10 @@ export default function mount(rootEl, host) {
         items: (resp.results ?? []).map((r) => normalizeItem(r)),
         sortSkipped: false,
         enablePathMatch: undefined,
+        emptyBundledIndex: false,
       }
     }
-    return { items: [], sortSkipped: false, enablePathMatch: undefined }
+    return { items: [], sortSkipped: false, enablePathMatch: undefined, emptyBundledIndex: false }
   }
 
   async function search() {
@@ -345,6 +391,7 @@ export default function mount(rootEl, host) {
       const normalized = normalizeResponse(resp)
       state.items = normalized.items
       state.sortSkipped = normalized.sortSkipped
+      state.emptyBundledIndex = normalized.emptyBundledIndex
       if (normalized.enablePathMatch !== undefined) {
         state.enablePathMatch = normalized.enablePathMatch
         renderPathMatch()
