@@ -1,6 +1,6 @@
 # ZeroLaunch Everything 搜索插件
 
-ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，以沉浸式面板呈现结果。触发词 `ev` / `every`，全局热键 `Ctrl+E`。
+ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，以沉浸式面板呈现结果。触发词 `ev` / `every`（在候选项里选中进入），热键 `Ctrl+E`（搜索窗打开时生效）。
 
 ## 功能
 
@@ -24,7 +24,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 | 操作 | 效果 |
 | --- | --- |
 | `Ctrl+E` | 唤起沉浸式面板 |
-| 搜索栏输入 `ev` / `every` + 空格 | 触发词唤起（带查询词时直接展示结果并预填输入框） |
+| 搜索栏输入 `ev` / `every`，选中候选项后 `Enter` | 进入沉浸式面板（触发词后跟查询词会让候选项从列表里消失；查询在面板输入框里输入） |
 | `↑` / `↓` | 选择结果 |
 | `Enter` / 双击 | 打开选中项 |
 | `Ctrl+Enter` | 打开选中项所在文件夹 |
@@ -67,7 +67,7 @@ Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folde
 ```
 
 - **CustomPanel 数据契约**：`panelData` 为自描述 JSON——`query`、`items`（`path`/`name`/`dir`/`isFolder`/`size`/`modified`(unix 秒)/`extension`）、`sortSkipped`、`enablePathMatch`、`resultLimit`、`emptyBundledIndex`（探针确认的「随包实例索引为空」标记）。面板按需自渲染，`keep_search_bar = false`。
-- **唤醒重放**：宿主唤起面板时经 `onDataUpdate` 重放下次查询数据；触发词带查询词进入时直接展示结果并将查询词预填到输入框。
+- **唤醒重放**：宿主唤起面板时以空查询调用 `query()`，返回的面板数据经 `onDataUpdate` 下发（首次为空列表）；查询词由面板输入框输入后触发。
 - **List 回退**：面板 `normalizeResponse` 兼容宿主旧管线返回的 `mode: "search"` 列表形状（title/subtitle/icon），统一为内部 item。
 - **SDK 并发约束**：Everything SDK 的 set_search/query/迭代作用于进程内全局状态，全部查询经 `search_guard` 互斥串行化，并在 `tokio::spawn_blocking` 中执行，避免阻塞 RPC 循环。
 - **单实例复用**：进程内复用首个 `Everything` 实例（第二个实例的数据库等待会挂死）；每次查询前 `reset()` 清空上次结果状态；`Everything_SetMatchPath` 为 SDK 全局状态，每次查询显式设置保证确定性。
@@ -77,7 +77,7 @@ Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folde
 ## 项目结构
 
 ```
-├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（0.2.1）+ win32job / clipboard-win（Windows）
+├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（0.2.2）+ win32job / clipboard-win（Windows）
 ├── manifest.toml       # 插件清单（必填 [plugin] 元数据 + 运行时命令、热键、面板入口），打包时位于 zip 根
 ├── icon.svg            # 插件图标（清单 [icon] 声明，随包分发并作为 Release 附件供市场卡片展示）
 ├── src/main.rs         # 启动骨架（init() + app().run()，随模板同步，尽量别改）
