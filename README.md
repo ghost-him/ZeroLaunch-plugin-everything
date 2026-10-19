@@ -77,7 +77,7 @@ Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folde
 ## 项目结构
 
 ```
-├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（0.2.2）+ win32job / clipboard-win（Windows）
+├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（0.2.3）+ win32job / clipboard-win（Windows）
 ├── manifest.toml       # 插件清单（必填 [plugin] 元数据 + 运行时命令、热键、面板入口），打包时位于 zip 根
 ├── icon.svg            # 插件图标（清单 [icon] 声明，随包分发并作为 Release 附件供市场卡片展示）
 ├── src/main.rs         # 启动骨架（init() + app().run()，随模板同步，尽量别改）
