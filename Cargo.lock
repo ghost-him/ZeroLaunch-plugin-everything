@@ -3681,9 +3681,9 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zerolaunch-plugin-api"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb71b7bb20a99765ac05d1b35a8c0f4876ca9022d7376c27047b9d428d70ee70"
+checksum = "27325c402b21c6b8ec6f25d4a6340f07ed322a2e9123c0606fe0d999e04f359a"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3713,7 +3713,7 @@ dependencies = [
 
 [[package]]
 name = "zerolaunch-plugin-everything"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "clipboard-win",

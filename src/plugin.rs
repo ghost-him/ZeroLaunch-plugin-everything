@@ -961,6 +961,7 @@ impl Configurable for EverythingPlugin {
                     widget: None,
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
             SettingDefinition {
@@ -989,6 +990,7 @@ impl Configurable for EverythingPlugin {
                     widget: Some(WidgetHint::Select),
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
             SettingDefinition {
@@ -1015,6 +1017,7 @@ impl Configurable for EverythingPlugin {
                     widget: None,
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
             SettingDefinition {
@@ -1037,6 +1040,7 @@ impl Configurable for EverythingPlugin {
                     widget: Some(WidgetHint::Toggle),
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
             SettingDefinition {
@@ -1059,6 +1063,7 @@ impl Configurable for EverythingPlugin {
                     widget: Some(WidgetHint::Toggle),
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
             SettingDefinition {
@@ -1090,6 +1095,7 @@ impl Configurable for EverythingPlugin {
                     widget: Some(WidgetHint::Path { mode: PathMode::File }),
                     action: None,
                     detail_action: None,
+                    drop: None,
                 },
             },
         ]
