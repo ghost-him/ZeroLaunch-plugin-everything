@@ -119,8 +119,8 @@ impl EverythingSlot {
 /// Windows Job 守卫——插件拉起的随包本体跟随插件退出。
 ///
 /// 仅限本文件内使用：由 `EverythingPlugin` 持有（与插件进程同寿命）。
-/// `KILL_ON_JOB_CLOSE` 语义下，最后一个 Job 句柄关闭即杀光 Job 内进程——正常路径是
-/// 守卫 `Drop`（插件 stdin EOF 退出），强杀路径由内核回收被终止进程的句柄触发。注意：
+/// `KILL_ON_JOB_CLOSE` 语义下，最后一个 Job 句柄关闭即杀光 Job 内进程——正常路径由
+/// 退出钩子先优雅停掉本体，这里只兜底强杀与钩子超时。注意：
 /// - 仅随包 exe（第 4 级探测命中）挂入本 Job；用户自装版绝不碰；
 /// - 提权（runas）进程挂不进普通权限 Job（完整性隔离），提权建库路径不管它；
 /// - 本体若已运行则拉起调用秒退（无新进程），此时挂 Job 是空操作。
@@ -202,10 +202,9 @@ const BUNDLED_EVERYTHING_EXE: &str = "everything.exe";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const LAUNCH_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// 让随包本体退出时的等待上限：必须明显短于宿主关停插件的 5s 超时
-/// （`PluginProcess::shutdown(Duration::from_secs(5))`），否则插件会被强杀。
+/// 让随包本体退出时的等待上限：退出钩子由宿主最多等 3s，留出余量避免插件被强杀。
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const STOP_EVERYTHING_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+const STOP_EVERYTHING_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// 插件安装根目录（插件 exe 位于 `<root>/bin/`，随包本体与 dll/ini 位于 `<root>/`）。
 ///
@@ -337,10 +336,10 @@ fn launch_everything_client(exe: &std::path::Path) -> Result<std::process::Child
 ///
 /// 背景：裸机（无服务）普通权限读不到 NTFS USN，随包实例的索引永远建不起来；
 /// 静默提权不存在，必须走 `runas` 过 UAC。
-/// 提权目标只可能是 `BundledBodyguard` 记录的随包 exe（安装根的编译期子路径），
+/// 提权目标只可能是 `bundled_exe` 记录的随包 exe（安装根的编译期子路径），
 /// 动作载荷无法影响它，故没有"诱导提权任意程序"的入口——`debug_assert!` 守住该不变量。
-/// 该实例不在 Job 内（跨完整性级别挂不进），由插件退出时的 `BundledBodyguard`
-/// （`-exit` + 等 exe 释放）负责送走，保证宿主随后的目录删除不会撞上运行中镜像。
+/// 该实例不在 Job 内（跨完整性级别挂不进），由插件退出钩子（`-exit` + 等 exe 释放）
+/// 负责送走，保证宿主随后的目录删除不会撞上运行中镜像。
 /// 实测 UIPI 放行普通权限 SDK 查询提权本体，建库中也可查（结果随建库增长）。
 /// 仅限本文件内使用：`execute_action(rebuild_index_elevated)` 调用。
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -387,7 +386,7 @@ fn launch_everything_elevated(exe: &Path) -> Result<(), String> {
 /// 等待判据是进程消失：进程终止时内核会释放它的镜像映射与文件句柄，那正是宿主
 /// `remove_dir_all` 需要的条件（运行中的镜像会让删除返回「拒绝访问」，插件目录便删不掉）。
 /// 超时只告警：`-exit` 已发出，实例最终仍会退出。
-/// 仅限本文件内使用：`BundledBodyguard::drop` 与 `launch_everything_elevated()` 调用。
+/// 仅限本文件内使用：`Plugin::on_shutdown` 与 `launch_everything_elevated()` 调用。
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn stop_everything_process(exe: &Path, wait: std::time::Duration) {
     use std::process::{Command, Stdio};
@@ -415,9 +414,9 @@ fn stop_everything_process(exe: &Path, wait: std::time::Duration) {
 
 /// 是否仍有 `everything.exe` 进程在运行（Toolhelp 按镜像名枚举，提权实例同样可见）。
 ///
-/// 不用 SDK：本函数在插件退出路径上工作，此处 SDK 全局状态可能已被清理（见
-/// `BundledBodyguard::drop`）。也不用"以 DELETE 权限打开 exe"这类探测——实测运行中的
-/// 镜像允许被以 DELETE 权限打开（映射阻止的是删除本身，不是打开），判不出占用。
+/// 不用 SDK：本函数在插件退出路径上工作，调用前 SDK 实例已被释放（见 `on_shutdown`）。
+/// 也不用"以 DELETE 权限打开 exe"这类探测——实测运行中的镜像允许被以 DELETE 权限打开
+/// （映射阻止的是删除本身，不是打开），判不出占用。
 /// 只按镜像名匹配，故调用方须用 `owned` 标志保证"只在随包实例是后端时才停止"。
 /// 仅限本文件内使用：`stop_everything_process()` 的前置判断与等待判据。
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -455,46 +454,6 @@ fn everything_process_running() -> bool {
         }
         CloseHandle(snapshot);
         found
-    }
-}
-
-/// 插件退出时把随包本体一起停掉——「先停插件、再删插件目录」这一约定里，插件负责前者。
-///
-/// 宿主卸载/升级的顺序是：关闭 stdin 等插件退出（5s 超时后强杀）→ `remove_dir_all`。
-/// 插件目录里躺着运行中的 `everything.exe`（镜像文件）时，删除会返回「拒绝访问」并把
-/// 插件留成半删状态（组件已注销、目录还在），因此必须在**插件退出前**把本体送走：
-/// - 普通权限那份另有 `JobGuard` 的 Job 兜底（关闭 Job 句柄即被杀，插件被强杀也生效）；
-/// - 提权实例跨完整性级别挂不进 Job，只能在这里显式 `-exit` 并等它释放 exe。
-/// 仅由 `EverythingPlugin` 持有（与插件同寿命，声明在 `job_guard` 之前 → 先优雅退出）。
-struct BundledBodyguard {
-    /// 插件安装根里的随包 exe：`-exit` 的发送方，也是"是否还在跑"的等待判据；
-    /// `None` = 拿不到插件安装根（异常环境），此时不做任何动作。
-    exe: Option<std::path::PathBuf>,
-    /// 后端是否由本插件拉起的随包实例（与 `EverythingPlugin::bundled_backend` 同一份标志）：
-    /// 为假说明默认实例可能是用户自装版，插件停止绝不能碰它。
-    owned: Arc<AtomicBool>,
-}
-
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-impl BundledBodyguard {
-    /// 插件安装根里的随包 exe 路径（`None` = 拿不到插件安装根）。
-    /// 「提权建库」入口直接用它——路径只来自插件自身构造的安装根子路径，不含用户输入。
-    fn exe(&self) -> Option<&Path> {
-        self.exe.as_deref()
-    }
-}
-
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-impl Drop for BundledBodyguard {
-    fn drop(&mut self) {
-        if !self.owned.load(Ordering::SeqCst) {
-            return;
-        }
-        let Some(exe) = &self.exe else { return };
-        // 刻意不调用任何 SDK 函数：`everything_slot` 字段先于本守卫析构
-        // （`Everything::drop` → SDK `CleanUp`），此时再调 `Everything_IsDBLoaded` 会挂住，
-        // 插件进程被宿主 5s 超时强杀（退出码 1），本体也就没被停掉。占用判断交给文件系统。
-        stop_everything_process(exe, STOP_EVERYTHING_WAIT);
     }
 }
 
@@ -571,11 +530,10 @@ struct EverythingPlugin {
     everything_slot: Arc<EverythingSlot>,
     /// Everything SDK 全局状态串行化锁（跨 spawn_blocking 共享）。
     search_guard: Arc<Mutex<()>>,
-    /// 随包本体停止守卫（与插件同寿命）：插件退出时把随包本体一起送走，宿主随后的
-    /// 插件目录删除才不会撞上"运行中镜像"（拒绝访问）。声明在 `job_guard` 之前，
-    /// 使其 Drop（优雅 `-exit` + 等 exe 释放）先于 Job 关闭（强杀兜底）执行。
+    /// 插件安装根里的随包本体路径（`None` = 拿不到安装根）：退出钩子据此发送 `-exit`，
+    /// 「提权建库」动作也用它定位启动目标。
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    bodyguard: Arc<BundledBodyguard>,
+    bundled_exe: Option<std::path::PathBuf>,
     /// 随包本体进程归属守卫（与插件同寿命；Drop 关闭 Job 即杀光 Job 内本体）。
     /// 仅随包命中时挂入；用户自装版/提权进程不管控。
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -605,10 +563,7 @@ impl EverythingPlugin {
             everything_slot: Arc::new(EverythingSlot::new()),
             search_guard: Arc::new(Mutex::new(())),
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-            bodyguard: Arc::new(BundledBodyguard {
-                exe: plugin_root().map(|root| root.join(BUNDLED_EVERYTHING_EXE)),
-                owned: Arc::clone(&bundled_backend),
-            }),
+            bundled_exe: plugin_root().map(|root| root.join(BUNDLED_EVERYTHING_EXE)),
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             job_guard: Arc::new(JobGuard::new()),
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -1149,6 +1104,38 @@ impl Plugin for EverythingPlugin {
         Ok(())
     }
 
+    /// 退出钩子：宿主在关闭程序、重载、卸载或覆盖安装前调用（最多等 3 秒）。
+    ///
+    /// 先释放 SDK 实例（其 Drop 负责全局清理），再在后端确为随包实例时发送 `-exit`
+    /// 并等待进程消失——宿主随后删除插件目录时不会撞上运行中的镜像。用户自装版不动。
+    /// 钩子超时或宿主崩溃时，普通权限的随包进程由 `JobGuard` 的 `KILL_ON_JOB_CLOSE` 兜底。
+    async fn on_shutdown(&self, ctx: &PluginContext) -> Result<(), PluginError> {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            if !self.bundled_backend.load(Ordering::SeqCst) {
+                debug!("后端不是随包实例，退出时不停止 Everything");
+                return Ok(());
+            }
+            let slot = Arc::clone(&self.everything_slot);
+            let exe = self.bundled_exe.clone();
+            info!(trace_id = %ctx.trace_id, "插件退出：停止随包的 Everything 本体");
+            // 阻塞等待（-exit + 轮询进程消失）放阻塞线程池，避免占住 RPC 运行时。
+            tokio::task::spawn_blocking(move || {
+                slot.0.lock().take();
+                if let Some(exe) = exe {
+                    stop_everything_process(&exe, STOP_EVERYTHING_WAIT);
+                }
+            })
+            .await
+            .map_err(|e| PluginError::ShutdownFailed(format!("停止随包本体任务失败: {e}")))?;
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        {
+            debug!(trace_id = %ctx.trace_id, "退出钩子：当前平台无可停止的随包本体");
+        }
+        Ok(())
+    }
+
     /// 查询统一返回沉浸式面板响应：空查询（热键唤醒）返回面板骨架；
     /// 非空查询执行 Everything 搜索，结果经 CustomPanel.data 自描述 JSON
     /// 承载（含大小/修改时间/目录/扩展名），面板按需自渲染。
@@ -1293,7 +1280,7 @@ impl Plugin for EverythingPlugin {
             "rebuild_index_elevated" => {
                 // 面板二次确认后走到这里：提权启动插件安装根里的随包本体建库（弹 UAC）。
                 // 退出旧实例（`-exit` + 等 exe 释放）是阻塞调用，放阻塞线程池执行，不占 tokio worker。
-                let exe = self.bodyguard.exe().map(Path::to_path_buf);
+                let exe = self.bundled_exe.clone();
                 tokio::task::spawn_blocking(move || {
                     let Some(exe) = exe else {
                         return Err("无法确定插件安装目录，拒绝提权启动".to_string());

@@ -16,7 +16,7 @@ ZeroLaunch 第三方插件：通过 Everything SDK 实时搜索本机文件，�
 - Windows x86_64（Everything SDK 仅提供 64 位 DLL，插件二进制同样仅构建该目标）。
 - 需要 Everything 本体（`Everything.exe`）在后台运行——SDK 经 IPC 与本体通信，仅保留 Everything 服务不够（服务只做 NTFS 索引代理，不响应查询）。
 - 本体缺失时插件可自动拉起（默认开启）：探测顺序为设置页自定义路径 → 官方默认安装路径 → `PATH` → 随包附带的 `everything.exe`（1.4.1.1032 完整版，非 Lite，裸机兜底）；以后台 `-startup` 无窗口启动，复用系统服务热索引（有服务时 1~2s 就绪）。关闭自启动后仅返回手动启动指引。随包实例由预置 `Everything.ini`（`app_data=0` + `show_tray_icon=0`）实现配置隔离与无托盘图标静默运行；用户自装版沿用其自身配置。
-- **随包本体在插件安装目录内运行**（自包含：装上即用，卸载后目录里不留任何运行时产物）——`everything.exe`（1.4.1.1032）、便携语义 `Everything.ini`（`app_data=0` + `show_tray_icon=0`）与它写出的 `Everything.db` 都在插件根。宿主卸载/升级的顺序是「先停插件 → 再删插件目录」，所以**插件进程退出前会把随包本体停掉**：`BundledBodyguard` 发 `-exit` 并等到 `everything.exe` 进程消失（运行中的镜像会让宿主的目录删除报「拒绝访问」）；插件被强杀时另由 Job（`KILL_ON_JOB_CLOSE`）兜底带走随包子进程。用户自装版（自定义路径/安装路径/PATH 命中）绝不被停止。注意宿主的「禁用」只是停止路由、不结束插件进程，因此禁用状态下本体仍在后台运行。
+- **随包本体在插件安装目录内运行**（自包含：装上即用，卸载后目录里不留任何运行时产物）——`everything.exe`（1.4.1.1032）、便携语义 `Everything.ini`（`app_data=0` + `show_tray_icon=0`）与它写出的 `Everything.db` 都在插件根。宿主卸载/升级的顺序是「先停插件 → 再删插件目录」，所以**插件退出前会把随包本体停掉**：退出钩子发 `-exit` 并等到 `everything.exe` 进程消失（运行中的镜像会让宿主的目录删除报「拒绝访问」）；插件被强杀或钩子超时时另由 Job（`KILL_ON_JOB_CLOSE`）兜底带走随包子进程。用户自装版（自定义路径/安装路径/PATH 命中）绝不被停止。注意宿主的「禁用」只是停止路由、不结束插件进程，因此禁用状态下本体仍在后台运行。
 - **本体是「默认实例」共享语义**：插件拉起时不用 `-instance`（1.4 版 SDK 只能连默认实例），所以随包实例占的就是系统默认实例位——它先跑起来时，用户之后双击自己的 Everything 会附到这个默认实例（看到的是随包的便携配置与库）；反之用户版已在跑时，插件只往既有实例发 `-startup`，不会另起进程。想要彻底隔离请在设置里指定用户版 exe 路径（探测优先命中它）。
 
 ## 使用
@@ -71,13 +71,13 @@ Ctrl+Enter → host.executeAction("open_folder", { path }) → 插件 open_folde
 - **List 回退**：面板 `normalizeResponse` 兼容宿主旧管线返回的 `mode: "search"` 列表形状（title/subtitle/icon），统一为内部 item。
 - **SDK 并发约束**：Everything SDK 的 set_search/query/迭代作用于进程内全局状态，全部查询经 `search_guard` 互斥串行化，并在 `tokio::spawn_blocking` 中执行，避免阻塞 RPC 循环。
 - **单实例复用**：进程内复用首个 `Everything` 实例（第二个实例的数据库等待会挂死）；每次查询前 `reset()` 清空上次结果状态；`Everything_SetMatchPath` 为 SDK 全局状态，每次查询显式设置保证确定性。
-- **随包本体生命周期**：`locate_everything_exe` 按 自定义 → 安装路径 → `PATH` → 随包副本 探测并返回 `BackendExe::{User,Bundled}`（Job 管控与提权入口的唯一判据）；随包命中时把子进程挂进 `KILL_ON_JOB_CLOSE` 的 Job，并在插件退出时由 `BundledBodyguard` 显式 `-exit` + 等 exe 释放。两者叠加保证宿主随后的 `remove_dir_all` 不会撞上"运行中镜像"（否则卸载会因「拒绝访问」失败并把插件留成半删状态）。
+- **随包本体生命周期**：`locate_everything_exe` 按 自定义 → 安装路径 → `PATH` → 随包副本 探测并返回 `BackendExe::{User,Bundled}`（Job 管控与提权入口的唯一判据）；随包命中时把子进程挂进 `KILL_ON_JOB_CLOSE` 的 Job，并在插件退出钩子里显式 `-exit` + 等 exe 释放。两者叠加保证宿主随后的 `remove_dir_all` 不会撞上"运行中镜像"（否则卸载会因「拒绝访问」失败并把插件留成半删状态）。
 - **运行时依赖**：`extra/Everything64.dll`、`extra/everything.exe`、`extra/Everything.lng`、`extra/Everything.ini` 由打包脚本并入 zip 根（插件 exe 在其 `bin/` 子目录，因此 `../` 即插件根），安装后必须保持该布局。
 
 ## 项目结构
 
 ```
-├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（sdk-rust 0.2.3、api 0.2.5）+ win32job / clipboard-win（Windows）
+├── Cargo.toml          # 依赖 zerolaunch-plugin-sdk-rust / plugin-api（sdk-rust 0.2.4、api 0.2.7）+ win32job / clipboard-win（Windows）
 ├── manifest.toml       # 插件清单（必填 [plugin] 元数据 + 运行时命令、热键、面板入口），打包时位于 zip 根
 ├── icon.svg            # 插件图标（清单 [icon] 声明，随包分发并作为 Release 附件供市场卡片展示）
 ├── src/main.rs         # 启动骨架（init() + app().run()，随模板同步，尽量别改）
@@ -127,7 +127,7 @@ python package.py --out <目录>       # 指定输出目录（默认 ./dist）
 - 本体未运行且自启动关闭（或找不到 exe）时查询返回中文指引并在面板显示，不再 panic（Issue #62）。
 - 裸机首次拉起需全盘建库（几十秒到几分钟），15s 内未就绪会提示稍后重试；有服务热索引时 1~2s 即可。
 - 「索引为空」提示的判据是一次独立探针查询（`*` 通配命中数为 0），不是「本次搜索没结果」：随包实例索引正常时，普通无匹配不会误提示去提权建库。
-- 提权建库启动的实例同样会被停掉：`BundledBodyguard` 的 `-exit` 实测跨完整性级别可用（无需 UAC；退出时会把已建索引落盘），所以卸载/升级/宿主关闭都不受它影响。要单独结束它：普通权限命令行执行插件根里的 `everything.exe -exit`，或管理员 `taskkill /F /IM everything.exe`。它无托盘图标，运行期间会占住插件目录（属预期，插件退出前会送走它）。
+- 提权建库启动的实例同样会被停掉：退出钩子里的 `-exit` 实测跨完整性级别可用（无需 UAC；退出时会把已建索引落盘），所以卸载/升级/宿主关闭都不受它影响。要单独结束它：普通权限命令行执行插件根里的 `everything.exe -exit`，或管理员 `taskkill /F /IM everything.exe`。它无托盘图标，运行期间会占住插件目录（属预期，插件退出前会送走它）。
 - 宿主「禁用」插件只切启用位与路由、不结束插件进程（`plugin_set_enabled` 实现如此），所以禁用状态不会触发停止逻辑，随包本体仍在后台运行；要停它就卸载，或普通权限执行插件根里的 `everything.exe -exit`。
 - 索引库 `Everything.db`（提权建库后近百 MB）随包落在插件根，是「自包含」设计的代价：**升级插件会连它一起被替换 → 需要重新提权建库一次**。
 - 随包分发 `everything.exe`（voidtools，1.4.1.1032）与 `Everything.lng`、`Everything64.dll`：本插件只做集成，二进制版权与许可归 voidtools，再分发条款以其官网为准。

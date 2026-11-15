@@ -3681,9 +3681,9 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zerolaunch-plugin-api"
-version = "0.2.5"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed363c397c8543cd5740506f07f029643e3a1efd6a200ccb883b907246cb2d20"
+checksum = "7eb9cf14599fa69abb3cc6c357966df308b07bbca87cd1dd57446c0e32b9f48d"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3713,7 +3713,7 @@ dependencies = [
 
 [[package]]
 name = "zerolaunch-plugin-everything"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "clipboard-win",
@@ -3732,9 +3732,9 @@ dependencies = [
 
 [[package]]
 name = "zerolaunch-plugin-protocol"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "749760a370da79f793c8ff092c7fd587990936755565874ed3ed73900dee15f7"
+checksum = "dd9887bcb116ca242c56ec651a9e21af6717ca009d82a01291f0ca420498cfb0"
 dependencies = [
  "semver",
  "serde",
@@ -3746,9 +3746,9 @@ dependencies = [
 
 [[package]]
 name = "zerolaunch-plugin-sdk-rust"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead506acbfaced9c61fd99fd9d47e0675f143bb79d8379784a1901aec226695b"
+checksum = "2701c8fca55a85fcff4c07982f6dfbe53e79627467adeda3fbb6f42d4e6a6b2b"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
